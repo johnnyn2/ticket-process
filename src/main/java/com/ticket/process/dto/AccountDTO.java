@@ -9,4 +9,6 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class AccountDTO {
     private String accountNo;
+    private String lastName;
+    private String firstName;
 }

@@ -13,7 +13,9 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Future;
@@ -44,6 +46,7 @@ public class TicketService {
         return systemRestTemplate.validateSeatAvailability(request);
     }
 
+
     public PurchaseResultDTO concurrentPurchase(PurchaseDTO purchaseDTO) {
         PurchaseResultDTO result = new PurchaseResultDTO();
         Callable<ResponseEntity<ValidateResultDTO>> validateAccount = () -> this.validateAccount(purchaseDTO);
@@ -52,26 +55,64 @@ public class TicketService {
         validationTasks.add(validateAccount);
         validationTasks.add(validateSeatAvailability);
 
+        // experiment result: concurrent API calls are faster than synchronous calls
         List<Future> futures = new ArrayList<>();
-        for (Callable validationTask: validationTasks) {
-            Future<ResponseEntity<ValidateResultDTO>> future = concurrentTaskExecutor.submit(validationTask);
-            futures.add(future);
-        }
+//        for (Callable validationTask: validationTasks) {
+//            Future<ResponseEntity<ValidateResultDTO>> future = concurrentTaskExecutor.submit(validationTask);
+//            futures.add(future);
+//        }
+        Future<ResponseEntity<ValidateResultDTO>> validateAccountFuture = concurrentTaskExecutor.submit(validateAccount);
+        Future<ResponseEntity<ValidateResultDTO>> validateSeatAvailabilityFuture = concurrentTaskExecutor.submit(validateSeatAvailability);
 
+//        try {
+//            for (Future future: futures) {
+//                ResponseEntity<ValidateResultDTO> r = (ResponseEntity<ValidateResultDTO>) future.get();
+//                log.info(r.getBody().toString());
+//                if (!r.getBody().isSuccess()) {
+//                    return null;
+//                }
+//            }
+//        } catch (Exception e) {
+//            e.printStackTrace();
+//            return null;
+//        }
         try {
-            for (Future future: futures) {
-                ResponseEntity<ValidateResultDTO> r = (ResponseEntity<ValidateResultDTO>) future.get();
-                log.info(r.getBody().toString());
-                if (!r.getBody().isSuccess()) {
-                    return null;
-                }
+            // validate account and seat availability
+            ResponseEntity<ValidateResultDTO> validateAccountResponse = (ResponseEntity<ValidateResultDTO>) validateAccountFuture.get();
+            ResponseEntity<ValidateResultDTO> validateSeatAvailabilityResponse = (ResponseEntity<ValidateResultDTO>) validateSeatAvailabilityFuture.get();
+            ValidateResultDTO validateAccountResponseBody = validateAccountResponse.getBody();
+            ValidateResultDTO validateSeatAvailabiltyResponseBody = validateSeatAvailabilityResponse.getBody();
+            if (!validateAccountResponseBody.isSuccess() || !validateSeatAvailabiltyResponseBody.isSuccess()) {
+                return null;
             }
+            // find concert and get account info
+            Callable<ResponseEntity<ConcertDTO>> findConcertByCode = () -> systemRestTemplate.findConcertByCode(purchaseDTO.getConcertCode());
+            Callable<ResponseEntity<AccountDTO>> getAccountInfoByAccountNo = () -> systemRestTemplate.getAccountInfoByAccountNo(purchaseDTO.getAccountNo());
+            Future<ResponseEntity<ConcertDTO>> findConcertByCodeFuture = concurrentTaskExecutor.submit(findConcertByCode);
+            Future<ResponseEntity<AccountDTO>> getAccountInfoByAccountNoFuture = concurrentTaskExecutor.submit(getAccountInfoByAccountNo);
+            ResponseEntity<ConcertDTO> findConcertByCodeResponse = findConcertByCodeFuture.get();
+            ResponseEntity<AccountDTO> getAccountInfoByAccountNoResponse = getAccountInfoByAccountNoFuture.get();
+            if (!findConcertByCodeResponse.hasBody() || !getAccountInfoByAccountNoResponse.hasBody()) {
+                return null;
+            }
+            // generate tickets
+            AccountDTO accountDTO = getAccountInfoByAccountNoResponse.getBody();
+            TicketDTO ticket = new TicketDTO();
+            UUID ticketNo = UUID.randomUUID();
+            ticket.setTicktNo(ticketNo.toString());
+            ticket.setConcert(findConcertByCodeResponse.getBody());
+            ticket.setSeat(purchaseDTO.getSeatDTO());
+            ticket.setLastName(accountDTO.getLastName());
+            ticket.setFirstName(accountDTO.getFirstName());
+            ticket.setAccountNo(purchaseDTO.getAccountNo());
+            UUID purchaseRef = UUID.randomUUID();
+            ticket.setPurchaseRef(purchaseRef.toString());
+            result.setTickets(Collections.singletonList(ticket));
+            return result;
         } catch (Exception e) {
             e.printStackTrace();
             return null;
         }
-
-        return result;
     }
 
     public PurchaseResultDTO synchronousPurchase(PurchaseDTO purchaseDTO) {

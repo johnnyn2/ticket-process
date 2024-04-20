@@ -9,4 +9,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class ValidateResultDTO {
     private boolean success;
+    private String accountNo;
+    private String lastName;
+    private String firstName;
 }
